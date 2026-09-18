@@ -12,18 +12,32 @@ window.MT_RATES = {
   // เงื่อนไขร่วมของ มิตรแท้เพิ่มพูน 2+ และ 3+
   plusRules: {
     maxAge: 15, // อายุรถเกิน 15 ปี (นับจากปีจดทะเบียน) ต้องส่งพิจารณาอนุมัติ
-    noClaimDiscount: [
-      { years: 0, label: 'ไม่มี / ไม่แน่ใจ', amount: 0 },
-      { years: 1, label: 'ไม่มีเคลม 1 ปีที่ผ่านมา', amount: 500 },
-      { years: 2, label: 'ไม่มีเคลม 2 ปีติดต่อกัน', amount: 900 },
-      { years: 3, label: 'ไม่มีเคลม 3 ปีติดต่อกันขึ้นไป', amount: 1200 },
-    ],
+    // ส่วนลดประวัติดี แยกตามกลุ่มรถ — standard ไม่มีเพราะตารางลูกค้าใหม่ 2569 รวมส่วนลดไม่มีเคลมล่วงหน้าไว้แล้ว
+    noClaimDiscount: {
+      standard: [],
+      fridge: [
+        { years: 0, label: 'ไม่มี / ไม่แน่ใจ', amount: 0 },
+        { years: 1, label: 'ไม่มีเคลม 1 ปีที่ผ่านมา', amount: 500 },
+      ],
+    },
+    // ตารางลูกค้าใหม่ปี 2569 (รถเก๋ง 110 และกระบะ 320 ทั่วไป) มีผล 16 ก.ย. – 31 ธ.ค. 2569
+    newCustomer: {
+      label: 'อัตราสำหรับลูกค้าใหม่ปี 2569',
+      period: '16 ก.ย. – 31 ธ.ค. 2569',
+      advanceNcd: 500,
+      definition: 'ไม่มีกรมธรรม์ภาคสมัครใจกับบริษัทในปี 2568 หรือมีประเภท 1/2/3 ในปี 2568 แล้วปี 2569 ทำ 2+/3+ หรือมีประเภท 3+ ในปี 2568 แล้วปี 2569 ทำ 2+',
+    },
     // ซื้อความรับผิดต่อชีวิต ร่างกาย บุคคลภายนอกเพิ่ม (มาตรฐาน 500,000 บาท/คน)
     tpbiUpgrade: [
       { perPerson: 500000, amount: 0 },
       { perPerson: 700000, amount: 400 },
       { perPerson: 1000000, amount: 1000 },
     ],
+    // เงื่อนไขเพิ่มเติมของกระบะต่อเติมตู้ทึบ/ตู้แห้ง/ตู้เย็น (ตารางอัตราเบี้ยปี 2569)
+    fridge: {
+      tppdDeductible: 5000, // ค่าเสียหายส่วนแรกต่อทรัพย์สินบุคคลภายนอก
+      exclusions: ['รถ Load เตี้ย', 'รถที่ติด Skirt ที่เป็นงานปั้น'],
+    },
   },
 
   plus: {
@@ -34,22 +48,22 @@ window.MT_RATES = {
       sums: [100000, 150000, 200000, 250000, 300000, 350000],
       // deduct = มี Deduct 2,000 บาท, noDeduct = ไม่มี Deduct — เรียงตาม sums
       rates: {
-        standard: { // รถเก๋ง/รถตลาด รหัส 110 และรถปิคอัพไม่เกิน 4 ตัน รหัส 320
-          PLATINUM: { deduct: [7520, 7920, 8320, 8720, 9020, 9320], noDeduct: [8220, 8720, 9220, 9720, 10220, 10620] },
-          GOLD: { deduct: [7100, 7500, 7900, 8300, 8600, 8900], noDeduct: [7800, 8300, 8800, 9300, 9800, 10200] },
-          SILVER: { deduct: [6400, 6800, 7100, 7400, 7600, 7900], noDeduct: [7100, 7600, 8000, 8400, 8800, 9200] },
+        standard: { // รถเก๋ง/รถตลาด รหัส 110 และรถปิคอัพไม่เกิน 4 ตัน รหัส 320 — ตารางลูกค้าใหม่ปี 2569
+          PLATINUM: { deduct: [6520, 6920, 7320, 7720, 8020, 8320], noDeduct: [7220, 7720, 8220, 8720, 9220, 9420] },
+          GOLD: { deduct: [6100, 6500, 6900, 7300, 7600, 7900], noDeduct: [6800, 7300, 7800, 8300, 8800, 9200] },
+          SILVER: { deduct: [5400, 5800, 6100, 6400, 6600, 6900], noDeduct: [6100, 6600, 7000, 7400, 7800, 8200] },
         },
-        fridge: { // รถปิคอัพไม่เกิน 4 ตัน รหัส 320 ต่อเติมตู้เย็น (มี/ไม่มีเครื่องทำความเย็น)
-          GOLD: { deduct: [8600, 9000, 9400, 9800, 10100, 10400], noDeduct: [9300, 9800, 10300, 10800, 11300, 11700] },
-          SILVER: { deduct: [7400, 7800, 8100, 8400, 8600, 8900], noDeduct: [8100, 8600, 9000, 9400, 9800, 10200] },
+        fridge: { // รถปิคอัพไม่เกิน 4 ตัน รหัส 320 ต่อเติมตู้ทึบ/ตู้แห้ง/ตู้เย็น — อัตราปี 2569 มีเฉพาะแบบมี Deduct
+          GOLD: { deduct: [15200, 15700, 16300, 16800, 17200, 17600] },
+          SILVER: { deduct: [13700, 14200, 14600, 15000, 15200, 15600] },
         },
       },
       coverage: {
         // เงินชดเชยรายได้/ค่าเดินทาง มีเฉพาะ PLATINUM ตาม PDF ต้นฉบับ
         // (Google Sheet ใส่ 1,000 ให้ GOLD ด้วย ซึ่งไม่ตรงกับ PDF)
-        PLATINUM: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 600000, dailyComp: 1000, travelComp: 1000 },
-        GOLD: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 600000 },
-        SILVER: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 1000000, theftFire: true, pa: 50000, med: 50000, bail: 200000 },
+        PLATINUM: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 600000, dailyComp: 1000, travelComp: 1000 },
+        GOLD: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 600000 },
+        SILVER: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 1000000, theftFire: true, pa: 50000, med: 50000, bail: 200000 },
       },
     },
 
@@ -59,18 +73,59 @@ window.MT_RATES = {
       deductible: 2000,
       sums: [20000, 30000, 40000, 50000, 100000, 150000, 200000, 250000],
       rates: {
-        standard: {
-          GOLD: { deduct: [6200, 6200, 6200, 6200, 6400, 6600, 6800, 7100], noDeduct: [7300, 7300, 7300, 7300, 7400, 7600, 7900, 8200] },
-          SILVER: { deduct: [5200, 5200, 5200, 5200, 5200, 5900, 6100, 6400], noDeduct: [6200, 6200, 6200, 6200, 6200, 6900, 7200, 7500] },
+        standard: { // ตารางลูกค้าใหม่ปี 2569
+          GOLD: { deduct: [5200, 5200, 5200, 5200, 5400, 5600, 5800, 6100], noDeduct: [6300, 6300, 6300, 6300, 6400, 6600, 6900, 7200] },
+          SILVER: { deduct: [4200, 4200, 4200, 4200, 4200, 4900, 5100, 5400], noDeduct: [5200, 5200, 5200, 5200, 5200, 5900, 6200, 6500] },
         },
-        fridge: {
-          GOLD: { deduct: [7700, 7700, 7700, 7700, 7900, 8100, 8300, 8600], noDeduct: [8800, 8800, 8800, 8800, 8900, 9100, 9400, 9700] },
-          SILVER: { deduct: [6500, 6500, 6500, 6500, 6700, 6900, 7100, 7400], noDeduct: [7600, 7600, 7600, 7600, 7700, 7900, 8200, 8500] },
+        fridge: { // อัตราปี 2569 มีเฉพาะแบบมี Deduct
+          GOLD: { deduct: [13100, 13100, 13100, 13100, 13300, 13600, 13800, 14200] },
+          SILVER: { deduct: [11500, 11500, 11500, 11500, 11800, 12000, 12300, 12700] },
         },
       },
       coverage: {
-        GOLD: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 2000000, theftFire: false, pa: 150000, med: 150000, bail: 600000 },
-        SILVER: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 1000000, theftFire: false, pa: 50000, med: 50000, bail: 200000 },
+        GOLD: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 2000000, theftFire: false, pa: 150000, med: 150000, bail: 600000 },
+        SILVER: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 1000000, theftFire: false, pa: 50000, med: 50000, bail: 200000 },
+      },
+    },
+  },
+
+  // มิตรแท้เพิ่มพูน 2+ ซ่อมห้าง — รถเก๋งส่วนบุคคล รหัส 110 เฉพาะรุ่นที่ระบุ มีผล 24 ส.ค. – 31 ธ.ค. 2569
+  dealer: {
+    cls: '2+',
+    name: 'มิตรแท้เพิ่มพูน 2+ ซ่อมห้าง',
+    period: '24 ส.ค. – 31 ธ.ค. 2569',
+    maxAge: 10,
+    accessories: 5000, // คุ้มครองอุปกรณ์ตกแต่งเพิ่มเติม
+    sums: [100000, 200000, 300000],
+    // ไม่มีค่าเสียหายส่วนแรก — เรียงตาม sums
+    rates: {
+      A: { PLATINUM: [9300, 10300, 11300], GOLD: [8880, 9880, 10880] }, // เก๋ง Eco Car / เก๋งเล็ก / SUV
+      B: { PLATINUM: [10300, 11300, 12300], GOLD: [9880, 10880, 11880] }, // เก๋งกลาง
+    },
+    coverage: {
+      PLATINUM: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 300000, natural: 20000, dailyComp: 1000, travelComp: 1000 },
+      GOLD: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 2000000, theftFire: true, pa: 150000, med: 150000, bail: 300000, natural: 20000 },
+    },
+    // ยี่ห้อ (id ใน data-cars.js) → ชื่อรุ่นที่รับประกัน
+    models: {
+      A: {
+        honda: ['Brio', 'City', 'City Hatchback', 'Jazz', 'Mobilio', 'BR-V', 'WR-V', 'CR-V', 'HR-V'],
+        mitsubishi: ['Mirage', 'Attrage', 'Xpander', 'Xpander Cross', 'Pajero Sport', 'Xforce'],
+        nissan: ['Almera', 'March', 'Note', 'Juke', 'X-Trail', 'Terra'],
+        suzuki: ['Swift', 'Celerio', 'Ciaz', 'Ertiga', 'XL7'],
+        toyota: ['Yaris', 'Yaris ATIV', 'Vios', 'Fortuner', 'Veloz', 'Corolla Cross', 'Yaris Cross'],
+        mazda: ['Mazda2', 'CX-5'],
+        mg: ['MG3', 'MG5', 'MG ZS'],
+        ford: ['Everest'],
+        isuzu: ['MU-X'],
+        gwm: ['Haval H6', 'Haval Jolion', 'Tank 300'],
+      },
+      B: {
+        honda: ['Civic'],
+        mazda: ['CX-3', 'CX-30', 'Mazda3'],
+        mg: ['MG6'],
+        nissan: ['Kicks'],
+        toyota: ['Corolla Altis', 'Sienta', 'C-HR'],
       },
     },
   },
@@ -86,9 +141,9 @@ window.MT_RATES = {
       '210': { NOPA: 3800 }, // รถตู้ส่วนบุคคลไม่เกิน 15 ที่นั่ง
     },
     plans: {
-      NOPA: { label: 'ไม่มี PA', coverage: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 1000000, pa: 0, med: 0, bail: 100000 } },
-      PA50: { label: 'พลัส PA 50,000', coverage: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 1000000, pa: 50000, med: 50000, bail: 200000 } },
-      PA100: { label: 'พลัส PA 100,000', coverage: { tpbiPerson: 500000, tpbiTime: 10000000, tppd: 1500000, pa: 100000, med: 100000, bail: 300000 } },
+      NOPA: { label: 'ไม่มี PA', coverage: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 1000000, pa: 0, med: 0, bail: 100000 } },
+      PA50: { label: 'พลัส PA 50,000', coverage: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 1000000, pa: 50000, med: 50000, bail: 200000 } },
+      PA100: { label: 'พลัส PA 100,000', coverage: { tpbiPerson: 500000, tpbiTime: 20000000, tppd: 1500000, pa: 100000, med: 100000, bail: 300000 } },
     },
   },
 
@@ -97,7 +152,7 @@ window.MT_RATES = {
     cls: '3',
     name: 'รถบรรทุก ประเภท 3',
     tppdOptions: [200000, 600000], // ลำดับตรงกับตัวเลขในตาราง rates
-    coverage: { tpbiPerson: 500000, tpbiTime: 10000000, pa: 100000, med: 100000 },
+    coverage: { tpbiPerson: 500000, tpbiTime: 20000000, pa: 100000, med: 100000 },
     sizes: {
       le12: {
         label: 'ขนาดไม่เกิน 12 ตัน',
