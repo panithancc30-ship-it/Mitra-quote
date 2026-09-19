@@ -45,6 +45,12 @@
   };
   const signed = (n) => `${n < 0 ? '-' : '+'}${money(Math.abs(n))}`;
   const yearLabel = (y) => `${y} (${y + 543})`;
+  // รับได้ทั้ง ISO timestamp และ YYYY-MM-DD (อย่างหลังต้องแยกเองไม่ให้เพี้ยนตาม timezone)
+  const thDate = (s) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(s);
+    return d.toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
 
   const ICONS = {
     check: '<path d="M5 12.5l4.2 4.2L19 7"/>',
@@ -58,6 +64,7 @@
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.1"/>',
     share: '<circle cx="17.5" cy="5.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/><path d="M8.7 10.7l6.6-3.9M8.7 13.3l6.6 3.9"/>',
     print: '<path d="M7 9V4h10v5"/><rect x="3.5" y="9" width="17" height="8" rx="2"/><path d="M7 14h10v6H7z"/>',
+    doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
     image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 16l-5-5-9 8.5"/>',
     car: '<path d="M3.5 16.5v-4.2L5.8 7h12.4l2.3 5.3v4.2z"/><path d="M3.5 12.3h17"/><circle cx="7.5" cy="16.5" r="1.8"/><circle cx="16.5" cy="16.5" r="1.8"/>',
     truck: '<path d="M2.5 6.5h11v10h-11zM13.5 10h4.5l3.5 3.5v3h-8z"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
@@ -86,12 +93,31 @@
     // แผนที่เลือกลงใบเสนอราคา: { key, sum (เฉพาะ 2+/3+), deduct (null = ไม่มีตัวเลือก Deduct) }
     picks: [],
     picksSig: null,
-    addons: { ncd: 0, tpbi: 500000, cmi: false },
+    addons: { cmi: false },
     customer: { name: '', phone: '' },
     quote: null,
+    // ใบแจ้งออกกรมธรรม์: pick = แผนที่ลูกค้าตกลงทำ (pickId), no/date ออกตอนสร้างเอกสาร
+    issue: {
+      pick: null, no: null, date: null,
+      idNo: '', birthDate: '', email: '',
+      plate: '', province: '', chassis: '', engine: '', color: '',
+      startDate: '', address: '', note: '',
+    },
   });
 
   let state = initialState();
+
+  const ATTACH_GROUPS = [
+    { id: 'book', label: 'สำเนาเล่มทะเบียนรถ', hint: 'หน้าที่มีเลขทะเบียนและชื่อผู้ครอบครอง' },
+    { id: 'idcard', label: 'สำเนาบัตรประชาชน', hint: 'ถ่ายให้เห็นชัดทั้งใบ' },
+    { id: 'other', label: 'เอกสารอื่นๆ', hint: 'เช่น ใบขับขี่ กรมธรรม์เดิม แบบฟอร์มอุปกรณ์ต่อเติม' },
+  ];
+  // รูปแนบเก็บในหน่วยความจำเท่านั้น — ใหญ่เกินโควตา sessionStorage
+  const emptyAttachments = () => ({ book: [], idcard: [], other: [] });
+  let attachments = emptyAttachments();
+  let attachSeq = 0;
+  let attachPending = 0;
+  const attachItems = () => ATTACH_GROUPS.flatMap((g) => attachments[g.id].map((a) => ({ ...a, label: g.label })));
   try {
     const saved = JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null');
     if (saved) state = { ...state, ...saved };
@@ -159,8 +185,7 @@
   }
 
   const plusGroup = (v) => (v.kind === 'pickup' && v.body === 'fridge' ? 'fridge' : 'standard');
-  const ncdLadder = (v) => R.plusRules.noClaimDiscount[plusGroup(v)] || [];
-  const hasAddons = (o) => o.type === 'plus' && o.pid !== 'dealer';
+  const isPlusStd = (o) => o.type === 'plus' && o.pid !== 'dealer';
   const hasCompRows = (o) => o.pid === 'plus2' || o.pid === 'dealer';
 
   // กลุ่มราคา ป.2+ ซ่อมห้าง ของรถคันนี้ (null = ไม่อยู่ในรายชื่อรุ่นที่รับ)
@@ -336,14 +361,14 @@
   ];
 
   // ค่าความคุ้มครองของแผน (HTML) — null = ไม่คุ้มครอง
-  function coverageValue(id, o, v, tpbiPerson) {
+  function coverageValue(id, o, v) {
     const c = o.cov;
     const seats = seatsFor(o, v);
     const seatTxt = seats ? `<br><small>ไม่เกิน ${seats} ที่นั่ง</small>` : '';
     switch (id) {
       case 'own': return o.type === 'plus' ? `ตามทุน ${money(o.sum)}` : null;
       case 'theft': return o.type === 'plus' && c.theftFire ? `ตามทุน ${money(o.sum)}` : null;
-      case 'tpbi': return `${money(tpbiPerson || c.tpbiPerson)} /คน<br>${money(c.tpbiTime)} /ครั้ง`;
+      case 'tpbi': return `${money(c.tpbiPerson)} /คน<br>${money(c.tpbiTime)} /ครั้ง`;
       case 'tppd': return `${money(c.tppd)} /ครั้ง` + (o.tppdDeductible ? `<br><small>ค่าเสียหายส่วนแรก ${money(o.tppdDeductible)}</small>` : '');
       case 'pa': return c.pa ? `${money(c.pa)} /คน${seatTxt}` : null;
       case 'med': return c.med ? `${money(c.med)} /คน${seatTxt}` : null;
@@ -394,7 +419,7 @@
   function offerNotes(o, v) {
     const notes = [];
     if (o.type !== 'tawikoon') notes.push({ icon: 'camera', text: 'ราคาสำหรับรถที่ติดกล้องติดรถยนต์' });
-    if (hasAddons(o) && v.age > R.plusRules.maxAge) {
+    if (isPlusStd(o) && v.age > R.plusRules.maxAge) {
       notes.push({ icon: 'alert', warn: true, text: `รถอายุ ${v.age} ปี (เกิน ${R.plusRules.maxAge} ปี) ต้องส่งพิจารณาอนุมัติ` });
     }
     if (o.group === 'standard') {
@@ -417,23 +442,16 @@
 
   // เบี้ยของแต่ละแผน แยกเป็นรายการ (ส่วนลด/ความคุ้มครองเพิ่ม/พ.ร.บ. ใช้ร่วมกันทุกแผน)
   function pricing(o, v) {
-    const p = { premium: o.price, ncd: 0, tpbi: 0, cmi: 0 };
-    if (hasAddons(o)) {
-      const ncd = ncdLadder(v).find((x) => x.years === state.addons.ncd);
-      if (ncd) p.ncd = -ncd.amount;
-      const up = R.plusRules.tpbiUpgrade.find((x) => x.perPerson === state.addons.tpbi);
-      if (up) p.tpbi = up.amount;
-    }
-    if (state.addons.cmi) p.cmi = cmiAmount(o, v);
-    p.total = round2(p.premium + p.ncd + p.tpbi + p.cmi);
+    const p = { premium: o.price, cmi: state.addons.cmi ? cmiAmount(o, v) : 0 };
+    p.total = round2(p.premium + p.cmi);
     return p;
   }
 
   function quoteConditions(v, offers) {
-    const plus = offers.some(hasAddons);
+    const plus = offers.some(isPlusStd);
     const dealer = offers.some((o) => o.pid === 'dealer');
     const truck = offers.some((o) => o.type === 'truck');
-    const mixed = plus && offers.some((o) => !hasAddons(o));
+    const mixed = plus && offers.some((o) => !isPlusStd(o));
     const scope = mixed ? 'ชั้น 2+ / 3+ ' : '';
     const max = R.plusRules.maxAge;
     const list = [];
@@ -450,7 +468,6 @@
         list.push(`${scope}มีค่าเสียหายส่วนแรกต่อทรัพย์สินของบุคคลภายนอก ${money(f.tppdDeductible)} บาท`);
         list.push(`${scope}ไม่รับประกันภัย${f.exclusions.join(', ')}`);
       }
-      if (state.addons.ncd && ncdLadder(v).length) list.push('ส่วนลดประวัติดีสำหรับรถที่ไม่มีเคลมในปีรับประกันภัยที่ผ่านมา (ไม่ว่าฝ่ายถูกหรือฝ่ายผิด)');
     }
     if (dealer) {
       const d = R.dealer;
@@ -464,7 +481,7 @@
 
   // ---------- navigation ----------
   const depth = () => (history.state && history.state.depth) || 0;
-  const PARENT = { plans: 'search', checkout: 'plans', quote: 'checkout' };
+  const PARENT = { plans: 'search', checkout: 'plans', quote: 'checkout', issue: 'quote', issuedoc: 'issue' };
 
   function canShow(view) {
     if (view === 'search') return true;
@@ -472,7 +489,9 @@
     if (view === 'plans') return true;
     const n = pickedOffers(vehicle()).length;
     if (view === 'checkout') return n > 0;
-    if (view === 'quote') return n > 0 && !!state.quote && !!state.customer.name.trim();
+    const quoteOk = n > 0 && !!state.quote && !!state.customer.name.trim();
+    if (view === 'quote' || view === 'issue') return quoteOk;
+    if (view === 'issuedoc') return quoteOk && !!state.issue.no && !!state.issue.address.trim();
     return false;
   }
 
@@ -510,9 +529,9 @@
     }
     document.body.dataset.view = view;
     $('#backBtn').hidden = view === 'search';
-    const views = { search: renderSearch, plans: renderPlans, checkout: renderCheckout, quote: renderQuote };
+    const views = { search: renderSearch, plans: renderPlans, checkout: renderCheckout, quote: renderQuote, issue: renderIssue, issuedoc: renderIssueDoc };
     app.innerHTML = views[view]();
-    if (view === 'quote') layoutQuote();
+    if (view === 'quote' || view === 'issuedoc') layoutPages();
     save();
   }
 
@@ -818,25 +837,11 @@
   function renderCheckout() {
     const v = vehicle();
     const offers = pickedOffers(v);
-    const anyPlus = offers.some(hasAddons);
     const cmi = offers.map((o) => cmiAmount(o, v)).find(Boolean) || 0;
-    const rules = R.plusRules;
-    const ladder = ncdLadder(v);
     const totals = offers.map((o) => ({ o, p: pricing(o, v) }));
     const minTotal = Math.min(...totals.map((t) => t.p.total));
 
     const extras = [];
-    if (anyPlus) {
-      const note = offers.some((o) => !hasAddons(o)) ? '<small>ใช้กับแผนชั้น 2+ และ 3+</small>' : '';
-      if (ladder.length) {
-        extras.push(`
-          <p class="field-label">ส่วนลดประวัติดี${note || '<small>ไม่มีเคลมทั้งฝ่ายถูกและฝ่ายผิด</small>'}</p>
-          ${radioList('ncd', ladder.map((d) => [d.years, d.label, d.amount ? `-${money(d.amount)}` : '']), state.addons.ncd)}`);
-      }
-      extras.push(`
-        <p class="field-label">ความคุ้มครองชีวิต ร่างกาย บุคคลภายนอก${note}</p>
-        ${radioList('tpbi', rules.tpbiUpgrade.map((u) => [u.perPerson, `${money(u.perPerson)} บาท/คน${u.amount ? '' : ' (มาตรฐาน)'}`, u.amount ? `+${money(u.amount)}` : '']), state.addons.tpbi)}`);
-    }
     if (cmi) {
       extras.push(`
         <button class="toggle-row ${state.addons.cmi ? 'is-on' : ''}" data-action="cmi" aria-pressed="${state.addons.cmi}">
@@ -853,7 +858,7 @@
       ${offers.map((o) => pickCard(o)).join('')}
       ${offers.length < MAX_PICKS ? `<button class="add-more" data-action="back">${icon('plus')}เลือกแผนเพิ่ม (ได้อีก ${MAX_PICKS - offers.length} แผน)</button>` : ''}
 
-      ${extras.length ? `<section class="card"><h2 class="card-title">ส่วนลดและความคุ้มครองเพิ่ม <small>ไม่บังคับ</small></h2>${extras.join('')}</section>` : ''}
+      ${extras.length ? `<section class="card"><h2 class="card-title">ประกันภาคบังคับ (พ.ร.บ.) <small>ไม่บังคับ</small></h2>${extras.join('')}</section>` : ''}
 
       <section class="card">
         <h2 class="card-title">ข้อมูลสำหรับใบเสนอราคา</h2>
@@ -874,8 +879,6 @@
         <dl class="bd plan-totals">
           ${totals.map(({ o, p }) => {
             const parts = [`เบี้ย ${money(p.premium)}`];
-            if (p.ncd) parts.push(`ส่วนลด ${signed(p.ncd)}`);
-            if (p.tpbi) parts.push(`วงเงินบุคคลภายนอก ${signed(p.tpbi)}`);
             if (p.cmi) parts.push(`พ.ร.บ. ${signed(p.cmi)}`);
             return `<div><dt><b>${esc(shortName(o))}</b><small>${esc(pickDetail(o))}${parts.length > 1 ? `<br>${esc(parts.join(' · '))}` : ''}</small></dt><dd>${money(p.total)}</dd></div>`;
           }).join('')}
@@ -899,24 +902,37 @@
         <button class="btn btn-ghost" data-action="share">${icon('share')}แชร์</button>
       </div>
       <p class="quote-hint">ใบเสนอราคาขนาด A4 หนึ่งหน้า · ถ่างนิ้วเพื่อซูมดู</p>
-      <div class="quote-stage" id="quoteStage">
-        <div class="quote-scaler" id="quoteScaler">${quotePage()}</div>
+      <div class="quote-stage">
+        <div class="quote-scaler">${quotePage()}</div>
       </div>
+      <button class="btn btn-primary btn-block issue-cta" data-action="to-issue">
+        <span>${icon('doc')}แจ้งออกกรมธรรม์</span><small>ลูกค้าตกลงทำ · แนบเล่มทะเบียน บัตรประชาชน ที่อยู่จัดส่ง</small>
+      </button>
       <button class="btn btn-ghost btn-block restart" data-action="restart">${icon('refresh')}เช็คเบี้ยคันใหม่</button>`;
   }
 
-  function quotePage() {
-    const v = vehicle();
-    const offers = pickedOffers(v);
-    const n = offers.length;
-    const q = state.quote;
-    const date = new Date(q.date).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
-    const prices = offers.map((o) => pricing(o, v));
-    const anyPlus = offers.some((o) => o.type === 'plus');
-    const anyDeduct = offers.some((o) => o.type !== 'tawikoon');
-    const labelWidth = { 1: 46, 2: 34, 3: 28, 4: 25 }[n];
-    const tpbiFor = (o) => (hasAddons(o) ? state.addons.tpbi : null);
+  function docHead(title, sub) {
+    return `
+      <header class="qp-head">
+        <div class="qp-brand">
+          ${icon('shield')}
+          <div><small>${esc(AGENT.office)}</small><b>${esc(AGENT.name)}</b><span>${icon('phone')}โทร ${esc(AGENT.phone)}</span></div>
+        </div>
+        <div class="qp-title">
+          <h1>${title}</h1>
+          <p>${sub}</p>
+          <p class="qp-insurer">ผู้รับประกันภัย บริษัท มิตรแท้ประกันภัย จำกัด (มหาชน)</p>
+        </div>
+      </header>`;
+  }
 
+  const docFoot = () => `
+      <footer class="qp-foot">
+        <span>Mittare Contact Center <b>${R.contact.center}</b></span>
+        <span>แจ้งอุบัติเหตุ 24 ชม. <b>${R.contact.accident}</b></span>
+      </footer>`;
+
+  function carRows(v) {
     const car = [
       ['ยี่ห้อ / รุ่น', esc(v.name)],
       ['ปีรถ', yearLabel(v.year)],
@@ -924,6 +940,20 @@
     ];
     if (v.body) car.push(['ลักษณะรถ', BODY_LABEL[v.body]]);
     else if (v.kind === 'car') car.push(['การใช้รถ', state.usage === 'commercial' ? 'เพื่อการพาณิชย์' : 'ส่วนบุคคล']);
+    return car;
+  }
+
+  function quotePage(id = 'quoteDoc') {
+    const v = vehicle();
+    const offers = pickedOffers(v);
+    const n = offers.length;
+    const q = state.quote;
+    const date = thDate(q.date);
+    const prices = offers.map((o) => pricing(o, v));
+    const anyPlus = offers.some((o) => o.type === 'plus');
+    const anyDeduct = offers.some((o) => o.type !== 'tawikoon');
+    const labelWidth = { 1: 46, 2: 34, 3: 28, 4: 25 }[n];
+    const car = carRows(v);
 
     const row = (label, cells, cls = '') => `<tr class="${cls}"><th>${label}</th>${cells.join('')}</tr>`;
     const cell = (val) => `<td class="${val == null ? 'no' : ''}">${val == null ? 'ไม่คุ้มครอง' : val}</td>`;
@@ -941,37 +971,20 @@
     rowsFor(offers).forEach((r) => {
       body.push(row(rowLabel(r, offers), offers.map((o) => {
         if (r.plus2Only && !hasCompRows(o)) return cell(null);
-        return cell(coverageValue(r.id, o, v, tpbiFor(o)));
+        return cell(coverageValue(r.id, o, v));
       })));
     });
     body.push(group('เบี้ยประกันภัย (บาท)'));
     body.push(row('เบี้ยประกันภัย<small>รวมภาษีมูลค่าเพิ่มและอากรแสตมป์</small>', prices.map((p) => `<td>${money(p.premium)}</td>`)));
-    if (prices.some((p) => p.ncd)) {
-      const ncd = ncdLadder(v).find((x) => x.years === state.addons.ncd);
-      body.push(row(`ส่วนลดประวัติดี<small>${esc(ncd.label)}</small>`, offers.map((o, i) => (hasAddons(o) ? `<td class="minus">${signed(prices[i].ncd)}</td>` : dash))));
-    }
-    if (prices.some((p) => p.tpbi)) {
-      body.push(row(`เพิ่มวงเงินชีวิตบุคคลภายนอก<small>เป็น ${money(state.addons.tpbi)} บาท/คน</small>`, offers.map((o, i) => (hasAddons(o) ? `<td>${signed(prices[i].tpbi)}</td>` : dash))));
-    }
     if (prices.some((p) => p.cmi)) {
       body.push(row('พ.ร.บ.<small>รวมภาษีอากร</small>', prices.map((p) => (p.cmi ? `<td>${signed(p.cmi)}</td>` : dash))));
     }
     body.push(row('รวมทั้งสิ้น', prices.map((p) => `<td>${money(p.total)}</td>`), 'total'));
 
     return `
-      <article class="qp" id="quoteDoc">
+      <article class="qp" id="${id}" data-fit>
         <div class="qp-inner">
-          <header class="qp-head">
-            <div class="qp-brand">
-              ${icon('shield')}
-              <div><small>${esc(AGENT.office)}</small><b>${esc(AGENT.name)}</b><span>${icon('phone')}โทร ${esc(AGENT.phone)}</span></div>
-            </div>
-            <div class="qp-title">
-              <h1>ใบเสนอราคา</h1>
-              <p>ประกันภัยรถยนต์ภาคสมัครใจ</p>
-              <p class="qp-insurer">ผู้รับประกันภัย บริษัท มิตรแท้ประกันภัย จำกัด (มหาชน)</p>
-            </div>
-          </header>
+          ${docHead('ใบเสนอราคา', 'ประกันภัยรถยนต์ภาคสมัครใจ')}
           <div class="qp-meta">
             <div><small>เรียน</small><b>${esc(state.customer.name.trim())}</b>${state.customer.phone.trim() ? `<span>โทร ${esc(state.customer.phone.trim())}</span>` : ''}</div>
             <div><small>เลขที่</small><b>${esc(q.no)}</b></div>
@@ -1003,18 +1016,387 @@
             <h4>เงื่อนไข</h4>
             <ol>${quoteConditions(v, offers).map((c) => `<li>${esc(c)}</li>`).join('')}</ol>
           </section>
-          <footer class="qp-foot">
-            <span>Mittare Contact Center <b>${R.contact.center}</b></span>
-            <span>แจ้งอุบัติเหตุ 24 ชม. <b>${R.contact.accident}</b></span>
-          </footer>
+          ${docFoot()}
         </div>
       </article>`;
   }
 
-  // ย่อขนาดตัวอักษรจนเนื้อหาพอดี A4 หนึ่งหน้า แล้วย่อทั้งหน้าให้พอดีความกว้างจอ
-  function layoutQuote() {
-    const page = $('#quoteDoc');
-    if (!page) return;
+  // ---------- ใบแจ้งออกกรมธรรม์ ----------
+  function issueOffer(v) {
+    const offers = pickedOffers(v);
+    return offers.find((o) => pickId(pickFromOffer(o)) === state.issue.pick) || offers[0] || null;
+  }
+
+  function shrinkImage(file, max = 1600) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * s);
+        c.height = Math.round(img.naturalHeight * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+      img.src = url;
+    });
+  }
+
+  const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+  const MAX_PDF_PAGES = 10;
+
+  async function loadPdfJs() {
+    if (!window.pdfjsLib) {
+      const lib = await import(`${PDFJS}pdf.min.mjs`);
+      lib.GlobalWorkerOptions.workerSrc = `${PDFJS}pdf.worker.min.mjs`;
+      window.pdfjsLib = lib;
+    }
+    return window.pdfjsLib;
+  }
+
+  // แปลงแต่ละหน้าของ PDF เป็นรูป JPEG เพื่อใช้ระบบเอกสารแนบเดียวกับรูปถ่าย
+  async function pdfToImages(file, max = 1600) {
+    const pdfjs = await loadPdfJs();
+    const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    const n = Math.min(pdf.numPages, MAX_PDF_PAGES);
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: max / Math.max(base.width, base.height) });
+      const c = document.createElement('canvas');
+      c.width = Math.round(vp.width);
+      c.height = Math.round(vp.height);
+      // intent 'print' ใช้ timer แทน requestAnimationFrame — ไม่ค้างถ้าผู้ใช้สลับแอปไปตอนกำลังอ่านไฟล์
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp, intent: 'print' }).promise;
+      out.push({ dataUrl: c.toDataURL('image/jpeg', 0.85), page: i, pages: pdf.numPages });
+    }
+    return out;
+  }
+
+  const isPdf = (file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+
+  async function addAttachments(group, files) {
+    attachPending += files.length;
+    render();
+    for (const file of files) {
+      try {
+        if (isPdf(file)) {
+          toast(`กำลังอ่าน ${file.name}…`);
+          const pages = await pdfToImages(file);
+          pages.forEach((p) => attachments[group].push({ id: ++attachSeq, dataUrl: p.dataUrl, name: `${file.name} หน้า ${p.page}/${p.pages}` }));
+          if (pages.length && pages[0].pages > MAX_PDF_PAGES) toast(`แนบได้สูงสุด ${MAX_PDF_PAGES} หน้าแรกของ PDF`);
+        } else if (file.type.startsWith('image/')) {
+          attachments[group].push({ id: ++attachSeq, dataUrl: await shrinkImage(file), name: file.name });
+        } else {
+          toast('รองรับเฉพาะรูปภาพและไฟล์ PDF');
+        }
+      } catch (e) {
+        toast(isPdf(file) ? `อ่านไฟล์ PDF ${file.name} ไม่สำเร็จ` : 'อ่านรูปไม่สำเร็จ');
+      }
+      attachPending--;
+      render();
+    }
+  }
+
+  function renderIssue() {
+    const v = vehicle();
+    const offers = pickedOffers(v);
+    const o = issueOffer(v);
+    const is = state.issue;
+    const total = pricing(o, v).total;
+
+    const planCard = offers.length > 1
+      ? `<section class="card">
+          <h2 class="card-title">แผนที่ลูกค้าตกลงทำ <small>เลือก 1 แผน</small></h2>
+          ${radioList('issue-pick', offers.map((x) => [pickId(pickFromOffer(x)), `${esc(shortName(x))} · ${esc(x.product)}<small>${esc(pickDetail(x))}</small>`, money(pricing(x, v).total)]), pickId(pickFromOffer(o)))}
+        </section>`
+      : `<section class="card">
+          <h2 class="card-title">แผนที่ลูกค้าตกลงทำ</h2>
+          <dl class="bd plan-totals"><div><dt><b>${esc(shortName(o))} · ${esc(o.product)}</b><small>${esc(pickDetail(o))}</small></dt><dd>${money(total)}</dd></div></dl>
+        </section>`;
+
+    return `
+      <div class="section-head">
+        <h2>แจ้งออกกรมธรรม์</h2>
+        <p>${icon(v.kind.startsWith('truck') ? 'truck' : 'car')} ${esc(v.name)} · ปี ${yearLabel(v.year)} · ใบเสนอราคา ${esc(state.quote.no)}</p>
+      </div>
+      ${planCard}
+
+      <section class="card">
+        <h2 class="card-title">ข้อมูลผู้เอาประกันภัย</h2>
+        <label class="field">
+          <span>ชื่อ-นามสกุล <i class="req">*</i></span>
+          <input id="custName" type="text" value="${esc(state.customer.name)}" autocomplete="name" maxlength="80">
+          <em class="field-error" id="nameError" hidden>กรุณากรอกชื่อลูกค้า</em>
+        </label>
+        <label class="field">
+          <span>เบอร์โทรศัพท์</span>
+          <input id="custPhone" type="tel" inputmode="tel" value="${esc(state.customer.phone)}" placeholder="08x-xxx-xxxx" autocomplete="tel" maxlength="20">
+          <em class="field-error" id="phoneError" hidden>เบอร์โทรไม่ถูกต้อง</em>
+        </label>
+        <label class="field">
+          <span>เลขบัตรประชาชน <small>(13 หลัก)</small></span>
+          <input id="issIdNo" type="text" inputmode="numeric" value="${esc(is.idNo)}" placeholder="x-xxxx-xxxxx-xx-x" maxlength="17">
+          <em class="field-error" id="idNoError" hidden>เลขบัตรประชาชนต้องมี 13 หลัก</em>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>วันเกิด <small>(ไม่บังคับ)</small></span>
+            <input id="issBirth" type="date" value="${esc(is.birthDate)}">
+          </label>
+          <label class="field">
+            <span>อีเมล <small>(รับกรมธรรม์ออนไลน์)</small></span>
+            <input id="issEmail" type="email" inputmode="email" value="${esc(is.email)}" placeholder="name@email.com" maxlength="80">
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">ข้อมูลรถตามเล่มทะเบียน <small>ไม่บังคับ — แอดมินอ่านจากรูปเล่มได้</small></h2>
+        <div class="field-row">
+          <label class="field">
+            <span>ทะเบียนรถ</span>
+            <input id="issPlate" type="text" value="${esc(is.plate)}" placeholder="กข 1234 / ป้ายแดง" maxlength="20">
+          </label>
+          <label class="field">
+            <span>จังหวัด</span>
+            <input id="issProvince" type="text" value="${esc(is.province)}" placeholder="กรุงเทพมหานคร" maxlength="40">
+          </label>
+        </div>
+        <label class="field">
+          <span>เลขตัวถัง (VIN)</span>
+          <input id="issChassis" type="text" value="${esc(is.chassis)}" placeholder="17 หลัก" maxlength="25" autocapitalize="characters">
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>เลขเครื่องยนต์</span>
+            <input id="issEngine" type="text" value="${esc(is.engine)}" maxlength="25" autocapitalize="characters">
+          </label>
+          <label class="field">
+            <span>สีรถ</span>
+            <input id="issColor" type="text" value="${esc(is.color)}" placeholder="ขาว" maxlength="20">
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">ความคุ้มครองและการจัดส่ง</h2>
+        <label class="field">
+          <span>วันที่เริ่มคุ้มครอง <small>(ไม่บังคับ — ว่างไว้ = แจ้งภายหลัง)</small></span>
+          <input id="issStart" type="date" value="${esc(is.startDate)}">
+        </label>
+        <label class="field">
+          <span>ที่อยู่จัดส่งเอกสาร / กรมธรรม์ <i class="req">*</i></span>
+          <textarea id="issAddress" rows="3" placeholder="บ้านเลขที่ หมู่ ซอย ถนน ตำบล อำเภอ จังหวัด รหัสไปรษณีย์">${esc(is.address)}</textarea>
+          <em class="field-error" id="addressError" hidden>กรุณากรอกที่อยู่จัดส่งเอกสาร</em>
+        </label>
+        <label class="field">
+          <span>หมายเหตุถึงแอดมิน <small>(ไม่บังคับ)</small></span>
+          <textarea id="issNote" rows="2" placeholder="เช่น ต้องการใบเสร็จในนามบริษัท, โอนชำระแล้ววันที่…">${esc(is.note)}</textarea>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">เอกสารแนบ <small>ถ่ายรูป เลือกรูป หรือไฟล์ PDF</small></h2>
+        ${ATTACH_GROUPS.map((g) => `
+          <div class="attach-group">
+            <p class="field-label">${g.label}<small>${g.hint}</small></p>
+            <div class="attach-grid">
+              ${attachments[g.id].map((a) => `
+                <div class="attach-thumb" title="${esc(a.name)}">
+                  <img src="${a.dataUrl}" alt="">
+                  ${/หน้า \d+\/\d+$/.test(a.name) ? `<small>${esc(a.name.replace(/^.*หน้า /, 'PDF หน้า '))}</small>` : ''}
+                  <button type="button" class="icon-btn remove" data-action="attach-remove" data-group="${g.id}" data-value="${a.id}" aria-label="ลบรูป">${icon('x')}</button>
+                </div>`).join('')}
+              <label class="attach-add ${attachPending ? 'is-busy' : ''}">${icon('camera')}<span>${attachPending ? 'กำลังอ่านไฟล์…' : 'เพิ่มรูป / PDF'}</span><input type="file" accept="image/*,application/pdf,.pdf" multiple data-action="attach" data-group="${g.id}" hidden></label>
+            </div>
+          </div>`).join('')}
+        <p class="attach-note">รูปแนบอยู่ในเครื่องนี้เท่านั้นจนกว่าจะปิดหน้า และไม่ถูกส่งไปที่ใดจนกว่าจะกดบันทึก/แชร์เอง</p>
+      </section>
+
+      <div class="bottom-bar">
+        <div class="bottom-inner">
+          <div><small>${esc(shortName(o))} · ${esc(pickDetail(o))}</small><b>${money(total)} <span>บาท</span></b></div>
+          <button class="btn btn-primary" data-action="make-issue">สร้างใบแจ้ง</button>
+        </div>
+      </div>`;
+  }
+
+  function makeIssue() {
+    if (attachPending) { toast('กำลังอ่านไฟล์แนบ รอสักครู่แล้วกดอีกครั้ง'); return; }
+    const name = state.customer.name.trim();
+    const phone = state.customer.phone.trim();
+    const digits = phone.replace(/\D/g, '');
+    const phoneBad = !!phone && (digits.length < 9 || digits.length > 10);
+    const idBad = !!state.issue.idNo.trim() && state.issue.idNo.replace(/\D/g, '').length !== 13;
+    const addr = state.issue.address.trim();
+    $('#nameError').hidden = !!name;
+    $('#phoneError').hidden = !phoneBad;
+    $('#idNoError').hidden = !idBad;
+    $('#addressError').hidden = !!addr;
+    const bad = (!name && '#custName') || (phoneBad && '#custPhone') || (idBad && '#issIdNo') || (!addr && '#issAddress');
+    if (bad) { $(bad).focus(); return; }
+    const v = vehicle();
+    state.issue.pick = pickId(pickFromOffer(issueOffer(v)));
+    const now = new Date();
+    const pad = (x) => String(x).padStart(2, '0');
+    state.issue.no = `IS${String(now.getFullYear() + 543).slice(-2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
+    state.issue.date = now.toISOString();
+    go('issuedoc');
+  }
+
+  function renderIssueDoc() {
+    const v = vehicle();
+    const o = issueOffer(v);
+    const items = attachItems();
+    const pages = [issuePage(v, o), quotePage('issueQuote'), ...items.map((it, i) => attachmentPage(it, i + 1, items.length))];
+    return `
+      <div class="quote-actions">
+        <button class="btn btn-primary" data-action="save-images">${icon('image')}บันทึกรูป</button>
+        <button class="btn btn-ghost" data-action="print">${icon('print')}PDF</button>
+        <button class="btn btn-ghost" data-action="share-issue">${icon('share')}แชร์</button>
+      </div>
+      <p class="quote-hint">ใบแจ้งออกกรมธรรม์ ${pages.length} หน้า (A4) · ใบแจ้ง + ใบเสนอราคา${items.length ? ` + เอกสารแนบ ${items.length} รูป` : ''}</p>
+      <div class="pages">${pages.map((p) => `<div class="quote-stage"><div class="quote-scaler">${p}</div></div>`).join('')}</div>
+      <button class="btn btn-ghost btn-block restart" data-action="restart">${icon('refresh')}เช็คเบี้ยคันใหม่</button>`;
+  }
+
+  function issuePage(v, o) {
+    const is = state.issue;
+    const q = state.quote;
+    const p = pricing(o, v);
+    const name = state.customer.name.trim();
+    const phone = state.customer.phone.trim();
+    const dl = (rows) => rows.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join('');
+
+    const or = (s, alt = '—') => (s && s.trim() ? esc(s.trim()) : `<i class="qp-na">${alt}</i>`);
+    const cust = [
+      ['ชื่อ-นามสกุล', esc(name)],
+      ['โทรศัพท์', or(phone)],
+      ['เลขบัตรประชาชน', or(is.idNo)],
+      ['วันเกิด', is.birthDate ? thDate(is.birthDate) : '<i class="qp-na">—</i>'],
+      ['อีเมล', or(is.email)],
+      ['วันที่เริ่มคุ้มครอง', is.startDate ? thDate(is.startDate) : '<i class="qp-na">แจ้งภายหลัง / ตามที่บริษัทกำหนด</i>'],
+    ];
+    const reg = [
+      ['ทะเบียนรถ', or(is.plate, 'ดูสำเนาเล่มทะเบียน')],
+      ['จังหวัด', or(is.province, 'ดูสำเนาเล่มทะเบียน')],
+      ['เลขตัวถัง', or(is.chassis, 'ดูสำเนาเล่มทะเบียน')],
+      ['เลขเครื่องยนต์', or(is.engine, 'ดูสำเนาเล่มทะเบียน')],
+      ['สีรถ', or(is.color, 'ดูสำเนาเล่มทะเบียน')],
+    ];
+    const plan = [];
+    if (o.type === 'plus') plan.push(['ทุนประกันรถชนรถ', `${money(o.sum)} บาท`]);
+    if (o.type !== 'tawikoon') plan.push(['ค่าเสียหายส่วนแรก', o.deductible ? `${money(o.deductible)} บาท` : 'ไม่มี']);
+    plan.push(['เบี้ยประกันภัย', `${money(p.premium)} บาท`]);
+    if (p.cmi) plan.push(['พ.ร.บ.', `${signed(p.cmi)} บาท`]);
+
+    const docs = [
+      [`ใบเสนอราคา เลขที่ ${q.no}`, 1, 'หน้า'],
+      ...ATTACH_GROUPS.map((g) => [g.label, attachments[g.id].length, 'รูป']),
+    ];
+
+    return `
+      <article class="qp qp-issue" data-fit>
+        <div class="qp-inner">
+          ${docHead('ใบแจ้งออกกรมธรรม์', 'ประกันภัยรถยนต์ภาคสมัครใจ')}
+          <div class="qp-meta">
+            <div><small>ผู้เอาประกันภัย</small><b>${esc(name)}</b></div>
+            <div><small>เลขที่</small><b>${esc(is.no)}</b></div>
+            <div><small>วันที่</small><b>${thDate(is.date)}</b></div>
+          </div>
+          <section class="qp-sec">
+            <h4>ข้อมูลผู้เอาประกันภัย</h4>
+            <dl class="qp-dl">${dl(cust)}</dl>
+            <dl class="qp-dl one"><div><dt>ที่อยู่จัดส่งเอกสาร / กรมธรรม์</dt><dd>${esc(is.address.trim())}</dd></div></dl>
+          </section>
+          <section class="qp-sec">
+            <h4>รายละเอียดรถยนต์</h4>
+            <dl class="qp-car">${dl(carRows(v))}</dl>
+            <dl class="qp-dl reg">${dl(reg)}</dl>
+          </section>
+          <section class="qp-sec">
+            <h4>แผนประกันภัยที่ตกลงทำ</h4>
+            <div class="qp-plan">
+              <div class="qp-plan-head">
+                <span class="qp-badges"><span class="cls ${CLS_CLASS[o.cls]}">ชั้น ${o.cls}</span>${o.tier ? `<span class="tier t-${o.tier.toLowerCase()}">${o.tier}</span>` : ''}</span>
+                <b>${esc(o.product)}</b><small>${esc(o.planTh)}</small>
+              </div>
+              <dl class="qp-dl">${dl(plan)}</dl>
+              <div class="qp-plan-total"><span>เบี้ยประกันภัยรวมทั้งสิ้น</span><b>${money(p.total)} บาท</b></div>
+            </div>
+            <p class="qp-ref">อ้างอิงใบเสนอราคาเลขที่ ${esc(q.no)} ลงวันที่ ${thDate(q.date)} (แนบท้าย) · ความคุ้มครองและเงื่อนไขตามใบเสนอราคา</p>
+          </section>
+          <section class="qp-sec">
+            <h4>เอกสารประกอบการออกกรมธรรม์</h4>
+            <ul class="qp-check">${docs.map(([l, n, u]) => `<li class="${n ? 'ok' : 'none'}">${icon(n ? 'check' : 'x')}<span>${esc(l)}</span><small>${n ? `${n} ${u}` : 'ไม่มี'}</small></li>`).join('')}</ul>
+          </section>
+          ${is.note.trim() ? `<section class="qp-sec"><h4>หมายเหตุ</h4><p class="qp-note">${esc(is.note.trim())}</p></section>` : ''}
+          <section class="qp-sec qp-admin">
+            <h4>สำหรับเจ้าหน้าที่บริษัท</h4>
+            <div class="qp-admin-box">
+              <div><small>เลขที่กรมธรรม์</small><span></span></div>
+              <div><small>วันที่ออกกรมธรรม์</small><span></span></div>
+              <div><small>ผู้บันทึก</small><span></span></div>
+              <div class="wide"><small>หมายเหตุเจ้าหน้าที่</small><span></span></div>
+            </div>
+          </section>
+          <section class="qp-sec qp-sign">
+            <div><span></span><b>ผู้เอาประกันภัย</b><small>(${esc(name)})</small></div>
+            <div><span></span><b>ตัวแทน</b><small>(${esc(AGENT.name)} · โทร ${esc(AGENT.phone)})</small></div>
+          </section>
+          ${docFoot()}
+        </div>
+      </article>`;
+  }
+
+  function attachmentPage(it, i, n) {
+    return `
+      <article class="qp qp-attach">
+        <div class="qp-inner">
+          ${docHead('เอกสารแนบ', `${esc(it.label)} · ${i}/${n}`)}
+          <div class="qp-meta">
+            <div><small>ผู้เอาประกันภัย</small><b>${esc(state.customer.name.trim())}</b></div>
+            <div><small>ใบแจ้งเลขที่</small><b>${esc(state.issue.no)}</b></div>
+            <div><small>เอกสาร</small><b>${esc(it.label)}</b>${/หน้า \d+\/\d+$/.test(it.name) ? `<br><small>${esc(it.name)}</small>` : ''}</div>
+          </div>
+          <div class="qp-attach-img"><img src="${it.dataUrl}" alt="${esc(it.label)}"></div>
+          ${docFoot()}
+        </div>
+      </article>`;
+  }
+
+  function issueShareText() {
+    const v = vehicle();
+    const o = issueOffer(v);
+    const is = state.issue;
+    const p = pricing(o, v);
+    const lines = [
+      'ใบแจ้งออกกรมธรรม์ประกันภัยรถยนต์ มิตรแท้ประกันภัย',
+      `เลขที่ ${is.no} (อ้างอิงใบเสนอราคา ${state.quote.no})`,
+      `ผู้เอาประกันภัย: ${state.customer.name.trim()}${state.customer.phone.trim() ? ` โทร ${state.customer.phone.trim()}` : ''}`,
+    ];
+    if (is.idNo.trim()) lines.push(`เลขบัตรประชาชน: ${is.idNo.trim()}`);
+    if (is.birthDate) lines.push(`วันเกิด: ${thDate(is.birthDate)}`);
+    if (is.email.trim()) lines.push(`อีเมล: ${is.email.trim()}`);
+    lines.push(`รถ: ${v.name} ปี ${yearLabel(v.year)}`);
+    const reg = [['ทะเบียน', is.plate], ['จังหวัด', is.province], ['เลขตัวถัง', is.chassis], ['เลขเครื่อง', is.engine], ['สี', is.color]].filter(([, x]) => x.trim());
+    if (reg.length) lines.push(`   ${reg.map(([k, x]) => `${k} ${x.trim()}`).join(' · ')}`);
+    lines.push('', `แผน: ${shortName(o)} ${o.product}`, `   ${pickDetail(o)}`, `   เบี้ยรวม ${money(p.total)} บาท`);
+    if (is.startDate) lines.push(`เริ่มคุ้มครอง: ${thDate(is.startDate)}`);
+    lines.push('', `ที่อยู่จัดส่งเอกสาร: ${is.address.trim()}`);
+    if (is.note.trim()) lines.push(`หมายเหตุ: ${is.note.trim()}`);
+    lines.push('', `เอกสารแนบ: ${ATTACH_GROUPS.map((g) => `${g.label} ${attachments[g.id].length} รูป`).join(', ')}`);
+    lines.push('', `${AGENT.office} ${AGENT.name}`, `โทร ${AGENT.phone}`);
+    return lines.join('\n');
+  }
+
+  // ย่อขนาดตัวอักษรจนเนื้อหาพอดี A4 หนึ่งหน้า แล้วย่อทุกหน้าให้พอดีความกว้างจอ
+  function fitPage(page) {
     const inner = page.querySelector('.qp-inner');
     // วัดความสูงจริงของเนื้อหา (ไม่ยืดเต็มหน้า) และเผื่อที่ว่างไว้ เพราะตอนบันทึกรูปตัวอักษรกว้างกว่าบนจอเล็กน้อย
     page.classList.add('is-measuring');
@@ -1025,16 +1407,20 @@
       page.style.setProperty('--qfs', `${fs}px`);
     }
     page.classList.remove('is-measuring');
-    scaleQuote();
   }
 
-  function scaleQuote() {
-    const stage = $('#quoteStage');
-    const scaler = $('#quoteScaler');
-    if (!stage || !scaler) return;
-    const s = Math.min(1, stage.clientWidth / PAGE_W);
-    scaler.style.transform = `scale(${s})`;
-    stage.style.height = `${Math.ceil(PAGE_H * s)}px`;
+  function layoutPages() {
+    document.querySelectorAll('.qp[data-fit]').forEach(fitPage);
+    scalePages();
+  }
+
+  function scalePages() {
+    document.querySelectorAll('.quote-stage').forEach((stage) => {
+      const scaler = stage.querySelector('.quote-scaler');
+      const s = Math.min(1, stage.clientWidth / PAGE_W);
+      scaler.style.transform = `scale(${s})`;
+      stage.style.height = `${Math.ceil(PAGE_H * s)}px`;
+    });
   }
 
   function shareText() {
@@ -1054,9 +1440,6 @@
       lines.push(`   เบี้ยรวม ${money(p.total)} บาท`);
     });
     const extra = [];
-    const ncd = ncdLadder(v).find((x) => x.years === state.addons.ncd);
-    if (ncd && ncd.amount && offers.some(hasAddons)) extra.push(`ส่วนลดประวัติดี ${money(ncd.amount)} บาท`);
-    if (state.addons.tpbi !== 500000 && offers.some(hasAddons)) extra.push(`วงเงินชีวิตบุคคลภายนอก ${money(state.addons.tpbi)} บาท/คน`);
     if (state.addons.cmi) extra.push('รวม พ.ร.บ.');
     if (extra.length) lines.push('', `(รวม ${extra.join(' · ')} แล้ว)`);
     lines.push('', `${AGENT.office} ${AGENT.name}`, `โทร ${AGENT.phone}`);
@@ -1255,31 +1638,36 @@
     return fontCSS;
   }
 
-  async function saveImage(btn) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function download(file) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  // บันทึกหน้าเอกสาร (.qp) เป็น PNG — หลายหน้าจะแชร์เป็นหลายไฟล์ในครั้งเดียวบนมือถือ
+  async function savePages(btn, pages, name, title) {
     btn.disabled = true;
-    toast('กำลังสร้างรูปภาพ…');
+    toast(pages.length > 1 ? `กำลังสร้างรูปภาพ ${pages.length} หน้า…` : 'กำลังสร้างรูปภาพ…');
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js');
-      const blob = await window.htmlToImage.toBlob($('#quoteDoc'), {
-        width: PAGE_W,
-        height: PAGE_H,
-        pixelRatio: 2,
-        backgroundColor: '#ffffff',
-        fontEmbedCSS: await embeddedFontCSS(),
-      });
-      const file = new File([blob], `ใบเสนอราคา-${state.quote.no}.png`, { type: 'image/png' });
+      const fontEmbedCSS = await embeddedFontCSS();
+      const files = [];
+      for (let i = 0; i < pages.length; i++) {
+        const blob = await window.htmlToImage.toBlob(pages[i], { width: PAGE_W, height: PAGE_H, pixelRatio: 2, backgroundColor: '#ffffff', fontEmbedCSS });
+        files.push(new File([blob], `${name}${pages.length > 1 ? `-${i + 1}` : ''}.png`, { type: 'image/png' }));
+      }
       const mobile = window.matchMedia('(pointer: coarse)').matches;
-      if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'ใบเสนอราคาประกันภัยรถยนต์' });
+      if (mobile && navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title });
       } else {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-        toast('บันทึกรูปภาพแล้ว');
+        for (const f of files) { download(f); await sleep(400); }
+        toast(files.length > 1 ? `บันทึกรูปภาพ ${files.length} ไฟล์แล้ว` : 'บันทึกรูปภาพแล้ว');
       }
     } catch (e) {
       if (e && e.name !== 'AbortError') toast('สร้างรูปภาพไม่สำเร็จ ลองใช้ปุ่ม PDF');
@@ -1288,15 +1676,14 @@
     }
   }
 
-  async function share() {
-    const text = shareText();
+  async function share(title, text) {
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'ใบเสนอราคาประกันภัยรถยนต์', text });
+        await navigator.share({ title, text });
         return;
       }
       await navigator.clipboard.writeText(text);
-      toast('คัดลอกข้อความใบเสนอราคาแล้ว');
+      toast('คัดลอกข้อความแล้ว');
     } catch (e) {
       if (e && e.name !== 'AbortError') toast('แชร์ไม่สำเร็จ');
     }
@@ -1387,15 +1774,23 @@
       case 'pick': togglePick(val); break;
       case 'unpick': state.picks.splice(Number(val), 1); render(); break;
       case 'to-checkout': go('checkout'); break;
-      case 'ncd': state.addons.ncd = Number(val); render(); break;
-      case 'tpbi': state.addons.tpbi = Number(val); render(); break;
       case 'cmi': state.addons.cmi = !state.addons.cmi; render(); break;
       case 'make-quote': makeQuote(); break;
-      case 'save-image': saveImage(el); break;
+      case 'save-image': savePages(el, [$('#quoteDoc')], `ใบเสนอราคา-${state.quote.no}`, 'ใบเสนอราคาประกันภัยรถยนต์'); break;
+      case 'save-images': savePages(el, [...document.querySelectorAll('.pages .qp')], `ใบแจ้งออกกรมธรรม์-${state.issue.no}`, 'ใบแจ้งออกกรมธรรม์'); break;
       case 'print': window.print(); break;
-      case 'share': share(); break;
+      case 'share': share('ใบเสนอราคาประกันภัยรถยนต์', shareText()); break;
+      case 'share-issue': share('ใบแจ้งออกกรมธรรม์', issueShareText()); break;
+      case 'to-issue': go('issue'); break;
+      case 'issue-pick': state.issue.pick = val; render(); break;
+      case 'attach-remove':
+        attachments[el.dataset.group] = attachments[el.dataset.group].filter((a) => String(a.id) !== val);
+        render();
+        break;
+      case 'make-issue': makeIssue(); break;
       case 'restart': {
         state = { ...initialState(), deduct: state.deduct };
+        attachments = emptyAttachments();
         history.replaceState({ view: 'search', depth: 0 }, '', '#search');
         render();
         window.scrollTo(0, 0);
@@ -1422,6 +1817,10 @@
       updatePick(Number(el.dataset.index), { sum: Number(el.value) });
     } else if (action === 'pick-deduct') {
       updatePick(Number(el.dataset.index), { deduct: el.value === '1' });
+    } else if (action === 'attach') {
+      const files = [...el.files];
+      el.value = '';
+      if (files.length) addAttachments(el.dataset.group, files);
     }
   });
 
@@ -1430,6 +1829,10 @@
     if (el.id === 'sheetSearch' && sheet) { sheet.query = el.value; drawSheetList(); return; }
     if (el.id === 'custName') { state.customer.name = el.value; $('#nameError').hidden = true; save(); return; }
     if (el.id === 'custPhone') { state.customer.phone = el.value; $('#phoneError').hidden = true; save(); return; }
+    if (el.id === 'issIdNo') { state.issue.idNo = el.value; $('#idNoError').hidden = true; save(); return; }
+    if (el.id === 'issAddress') { state.issue.address = el.value; $('#addressError').hidden = true; save(); return; }
+    const issueFields = { issStart: 'startDate', issNote: 'note', issBirth: 'birthDate', issEmail: 'email', issPlate: 'plate', issProvince: 'province', issChassis: 'chassis', issEngine: 'engine', issColor: 'color' };
+    if (issueFields[el.id]) { state.issue[issueFields[el.id]] = el.value; save(); return; }
     if (el.id === 'customModelName') { state.customModelName = el.value; save(); }
   });
 
@@ -1437,8 +1840,8 @@
     if (e.key === 'Escape' && sheet) closeSheet();
   });
 
-  window.addEventListener('resize', scaleQuote);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutQuote);
+  window.addEventListener('resize', scalePages);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutPages);
 
   window.addEventListener('popstate', (e) => {
     if (skipPop) { skipPop = false; return; }
@@ -1450,7 +1853,7 @@
 
   // ---------- boot ----------
   const hashView = location.hash.replace('#', '');
-  state.view = ['search', 'plans', 'checkout', 'quote'].includes(hashView) ? hashView : 'search';
+  state.view = ['search', 'plans', 'checkout', 'quote', 'issue', 'issuedoc'].includes(hashView) ? hashView : 'search';
   history.replaceState({ view: state.view, depth: 0 }, '', `#${state.view}`);
   render();
 
