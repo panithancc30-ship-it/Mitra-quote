@@ -1,5 +1,5 @@
 // ใช้แบบ network-first: ออนไลน์ได้อัตราเบี้ยล่าสุดเสมอ ออฟไลน์ใช้ไฟล์ที่เก็บไว้
-const CACHE = 'mt-quote-v4';
+const CACHE = 'mt-quote-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './assets/agent.js',
   './assets/data-rates.js',
   './assets/data-cars.js',
+  './assets/data-coverage.js',
   './assets/icon.svg',
 ];
 

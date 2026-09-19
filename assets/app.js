@@ -2,6 +2,7 @@
   'use strict';
 
   const R = window.MT_RATES;
+  const COV = window.MT_COVERAGE;
   const AGENT = window.MT_AGENT;
   const BRANDS = window.MT_BRANDS.map((b) => ({
     ...b,
@@ -65,6 +66,7 @@
     share: '<circle cx="17.5" cy="5.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/><path d="M8.7 10.7l6.6-3.9M8.7 13.3l6.6 3.9"/>',
     print: '<path d="M7 9V4h10v5"/><rect x="3.5" y="9" width="17" height="8" rx="2"/><path d="M7 14h10v6H7z"/>',
     doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+    table: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M3.5 14.5h17M9.5 5v14"/>',
     image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="M20.5 16l-5-5-9 8.5"/>',
     car: '<path d="M3.5 16.5v-4.2L5.8 7h12.4l2.3 5.3v4.2z"/><path d="M3.5 12.3h17"/><circle cx="7.5" cy="16.5" r="1.8"/><circle cx="16.5" cy="16.5" r="1.8"/>',
     truck: '<path d="M2.5 6.5h11v10h-11zM13.5 10h4.5l3.5 3.5v3h-8z"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
@@ -96,6 +98,7 @@
     addons: { cmi: false },
     customer: { name: '', phone: '' },
     quote: null,
+    covGroup: 0,
     // ใบแจ้งออกกรมธรรม์: pick = แผนที่ลูกค้าตกลงทำ (pickId), no/date ออกตอนสร้างเอกสาร
     issue: {
       pick: null, no: null, date: null,
@@ -481,10 +484,10 @@
 
   // ---------- navigation ----------
   const depth = () => (history.state && history.state.depth) || 0;
-  const PARENT = { plans: 'search', checkout: 'plans', quote: 'checkout', issue: 'quote', issuedoc: 'issue' };
+  const PARENT = { plans: 'search', checkout: 'plans', quote: 'checkout', issue: 'quote', issuedoc: 'issue', coverage: 'search' };
 
   function canShow(view) {
-    if (view === 'search') return true;
+    if (view === 'search' || view === 'coverage') return true;
     if (!isComplete()) return false;
     if (view === 'plans') return true;
     const n = pickedOffers(vehicle()).length;
@@ -523,15 +526,19 @@
       state.view = view;
       history.replaceState({ view, depth: depth() }, '', `#${view}`);
     }
-    if (view !== 'search') {
+    if (view !== 'search' && view !== 'coverage') {
       const v = vehicle();
       state.picks = state.picks.filter((p) => resolvePick(v, p));
     }
     document.body.dataset.view = view;
     $('#backBtn').hidden = view === 'search';
-    const views = { search: renderSearch, plans: renderPlans, checkout: renderCheckout, quote: renderQuote, issue: renderIssue, issuedoc: renderIssueDoc };
+    const views = { search: renderSearch, plans: renderPlans, checkout: renderCheckout, quote: renderQuote, issue: renderIssue, issuedoc: renderIssueDoc, coverage: renderCoverage };
     app.innerHTML = views[view]();
     if (view === 'quote' || view === 'issuedoc') layoutPages();
+    if (view === 'coverage') {
+      const t = $('.cov-tabs .tab.is-on');
+      if (t) t.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
     save();
   }
 
@@ -563,8 +570,45 @@
         ${bodyNeeded && state.year ? stepBody(model.kind) : ''}
         <button class="btn btn-primary btn-block see-plans" id="seePlans" data-action="see-plans" ${complete ? '' : 'disabled'}>ดูแผนประกันเลย</button>
       </section>
+      <button class="btn btn-ghost btn-block cov-link" data-action="to-coverage">${icon('table')}ตารางเงื่อนไขความคุ้มครอง<small>ป.1 · ป.2 · ป.3 ทุกรหัสรถ</small></button>
       ${agentCard()}
       <p class="page-note">เบี้ยประกันจากตารางอัตราเบี้ยมิตรแท้ประกันภัย รวมภาษีมูลค่าเพิ่มและอากรแสตมป์แล้ว</p>`;
+  }
+
+  // ---------- ตารางเงื่อนไขความคุ้มครอง ----------
+  function renderCoverage() {
+    const gi = Math.min(state.covGroup, COV.groups.length - 1);
+    const g = COV.groups[gi];
+    const rows = COV.rows.map((r, i) => `
+      ${r.section ? `<tr class="grp"><td colspan="${g.plans.length + 1}">${esc(r.section)}</td></tr>` : ''}
+      <tr>
+        <th>${esc(r.label)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</th>
+        ${g.plans.map((p) => {
+          const val = p.values[i] == null ? '' : String(p.values[i]);
+          const no = /^(-|ไม่มี|ไม่คุ้มครอง|0)$/.test(val.trim());
+          return `<td class="${no ? 'no' : ''}">${esc(val)}</td>`;
+        }).join('')}
+      </tr>`).join('');
+
+    return `
+      <div class="section-head">
+        <h2>ตารางเงื่อนไขความคุ้มครอง</h2>
+        <p>${icon('table')} เลือกกลุ่มรถ แล้วเลื่อนตารางไปทางขวาเพื่อดูทุกแผน</p>
+      </div>
+      <div class="cov-tabs" role="tablist">
+        ${COV.groups.map((x, i) => `<button role="tab" class="tab ${i === gi ? 'is-on' : ''}" data-action="cov-group" data-value="${i}" aria-selected="${i === gi}">${esc(x.title)}</button>`).join('')}
+      </div>
+      <section class="card cov-card">
+        <div class="cov-scroll">
+          <table class="cov-table">
+            <thead><tr><th>ความคุ้มครอง</th>${g.plans.map((p) => `<th>${esc(p.name)}</th>`).join('')}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${g.note ? `<p class="cov-note">${icon('info')}${esc(g.note)}</p>` : ''}
+      </section>
+      ${agentCard()}
+      <p class="page-note">อ้างอิงตารางเงื่อนไขความคุ้มครองของบริษัทฯ · บริษัทฯ ขอสงวนสิทธิ์ในการเปลี่ยนแปลงโดยไม่ต้องแจ้งให้ทราบล่วงหน้า</p>`;
   }
 
   function agentCard() {
@@ -1782,6 +1826,8 @@
       case 'share': share('ใบเสนอราคาประกันภัยรถยนต์', shareText()); break;
       case 'share-issue': share('ใบแจ้งออกกรมธรรม์', issueShareText()); break;
       case 'to-issue': go('issue'); break;
+      case 'to-coverage': go('coverage'); break;
+      case 'cov-group': state.covGroup = Number(val); render(); break;
       case 'issue-pick': state.issue.pick = val; render(); break;
       case 'attach-remove':
         attachments[el.dataset.group] = attachments[el.dataset.group].filter((a) => String(a.id) !== val);
@@ -1853,7 +1899,7 @@
 
   // ---------- boot ----------
   const hashView = location.hash.replace('#', '');
-  state.view = ['search', 'plans', 'checkout', 'quote', 'issue', 'issuedoc'].includes(hashView) ? hashView : 'search';
+  state.view = ['search', 'plans', 'checkout', 'quote', 'issue', 'issuedoc', 'coverage'].includes(hashView) ? hashView : 'search';
   history.replaceState({ view: state.view, depth: 0 }, '', `#${state.view}`);
   render();
 
